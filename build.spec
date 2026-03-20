@@ -14,6 +14,9 @@ a = Analysis(
     datas=[('assets', 'assets')],
     hiddenimports=[
         'pyperclip',
+        'win32clipboard',
+        'win32con',
+        'pywintypes',
         'cryptography',
         'cryptography.hazmat.primitives.ciphers.aead',
         'selenium.webdriver',
@@ -45,7 +48,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['matplotlib', 'numpy', 'pandas', 'scipy', 'PIL', 'pytest'],
+    excludes=['matplotlib', 'numpy', 'pandas', 'scipy', 'pytest'],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

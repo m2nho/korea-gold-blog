@@ -9,7 +9,7 @@ from threading import Event
 from config.settings import save_credentials, load_credentials
 from core.naver_auth import login, navigate_to_write, apply_template, LoginResult
 from core.google_sheets import fetch_posts, BlogPostData
-from core.blog_writer import fill_post, publish_post
+from core.blog_writer import fill_post, publish_post, insert_thumbnail, set_stop_event
 from ui.theme import (
     apply_theme, Card, PlaceholderEntry, ToggleSwitch,
     StepTimeline, ProgressBar, StatusBanner, DetailPreview, LogPanel,
@@ -22,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 LEVEL_TAGS = {"info": "info", "success": "success", "error": "error", "warn": "warn"}
 TOTAL_STEPS = 6
+
+
+# Windows 작업표시줄 아이콘 설정
+try:
+    import ctypes
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("naver.blog.automation.1.0")
+except Exception:
+    pass
 
 
 class MainWindow:
@@ -40,6 +48,7 @@ class MainWindow:
         self.selected_post: BlogPostData | None = None
         self._running = False
         self._stop_event = Event()
+        self.use_thumbnail_var = tk.BooleanVar(value=True)
 
         self._build_ui()
         self._load_saved()
@@ -108,7 +117,7 @@ class MainWindow:
                                      fg=FG_MUTED, font=("Consolas", 8), width=4)
         self._scale_label.pack(side="left", padx=(4, 0))
 
-        tk.Label(bar, text="v1.0.0", bg=BG_SURFACE, fg=FG_MUTED,
+        tk.Label(bar, text="v1.1.0", bg=BG_SURFACE, fg=FG_MUTED,
                  font=("Consolas", 8), padx=8).pack(side="right")
 
         # 2-패널 컨테이너
@@ -237,11 +246,29 @@ class MainWindow:
         self.banner.set_state("idle", "준비 완료", "설정을 완료하고 자동화를 시작하세요")
 
         # 우측 중앙: 미리보기 / 진행 단계 전환 영역
-        self._right_mid = tk.Frame(right, bg=BG)
-        self._right_mid.pack(fill="both", expand=True, padx=RP, pady=(10, 0))
+        self._right_mid_wrap = tk.Frame(right, bg=BG)
+        self._right_mid_wrap.pack(fill="both", expand=True, padx=RP, pady=(10, 0))
+
+        # 전환 탭 바
+        self._view_bar = tk.Frame(self._right_mid_wrap, bg=BG_SURFACE)
+        self._view_bar.pack(fill="x")
+        self._view_tabs: list[tk.Label] = []
+        for i, name in enumerate(["📋 미리보기", "📍 진행 단계"]):
+            btn = tk.Label(
+                self._view_bar, text=name, bg=BG_SURFACE, fg=FG_MUTED,
+                font=("Segoe UI", 9, "bold"), padx=14, pady=6, cursor="hand2",
+            )
+            btn.pack(side="left")
+            btn.bind("<Button-1>", lambda _, idx=i: (
+                self._show_preview() if idx == 0 else self._show_progress()
+            ))
+            self._view_tabs.append(btn)
+
+        self._right_mid = tk.Frame(self._right_mid_wrap, bg=BG)
+        self._right_mid.pack(fill="both", expand=True)
 
         # 미리보기 패널
-        self.detail_preview = DetailPreview(self._right_mid)
+        self.detail_preview = DetailPreview(self._right_mid, thumbnail_var=self.use_thumbnail_var)
 
         # 진행 단계 패널
         self._progress_panel = tk.Frame(self._right_mid, bg=BG)
@@ -255,6 +282,7 @@ class MainWindow:
         # 초기: 미리보기 표시
         self.detail_preview.pack(fill="both", expand=True)
         self._showing_progress = False
+        self._update_view_tabs()
 
         self.root.bind("<Return>", lambda _: self._on_start())
         self.root.bind("<Control-MouseWheel>", self._on_ctrl_wheel)
@@ -395,6 +423,7 @@ class MainWindow:
             return
 
         self._stop_event.clear()
+        set_stop_event(self._stop_event)
         self._set_running(True)
         self._show_progress()
         self.log_panel.clear()
@@ -413,10 +442,7 @@ class MainWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def _is_stopped(self) -> bool:
-        if self._stop_event.is_set():
-            self.root.after(0, self._on_stopped)
-            return True
-        return False
+        return self._stop_event.is_set()
 
     def _after_login(self, result: LoginResult, blog_id: str):
         if self._is_stopped():
@@ -454,6 +480,43 @@ class MainWindow:
             return
         self._step(4)
 
+        # 썸네일 사용 ON이면 이미지 삽입 후 데이터 입력
+        if self.use_thumbnail_var.get():
+            def w():
+                thumb_path = self._ensure_thumbnail()
+                if thumb_path:
+                    ok = insert_thumbnail(self.driver, str(thumb_path), self._status_cb)
+                else:
+                    self._status_cb("⚠️ 썸네일 생성 실패, 생략합니다", "warn")
+                    ok = True  # 썸네일 실패해도 계속 진행
+                self.root.after(0, lambda: self._after_thumbnail(ok))
+            threading.Thread(target=w, daemon=True).start()
+        else:
+            self._after_thumbnail(True)
+
+    def _ensure_thumbnail(self) -> Path | None:
+        """output.png가 있으면 재사용, 없으면 자동 생성"""
+        from core.thumbnail import create_thumbnail, _split_title, _pick_random_background, OUTPUT_DIR
+        output = OUTPUT_DIR / "output.png"
+        if output.exists():
+            self._status_cb("🖼 기존 썸네일을 사용합니다", "info")
+            return output
+        try:
+            self._status_cb("🖼 썸네일을 자동 생성합니다", "info")
+            title = self.selected_post.section2_title or ""
+            l1, l2 = _split_title(title)
+            if not l1:
+                l1 = self.selected_post.section1_title or "썸네일"
+            bg = str(_pick_random_background())
+            return create_thumbnail(bg, l1, l2)
+        except Exception as e:
+            logger.exception("썸네일 자동 생성 실패")
+            return None
+
+    def _after_thumbnail(self, ok: bool):
+        if self._is_stopped():
+            return
+        # 썸네일 실패해도 데이터 입력은 계속 진행
         def w():
             ok = fill_post(self.driver, self.selected_post, self._status_cb)
             self.root.after(0, lambda: self._after_fill(ok))
@@ -508,12 +571,13 @@ class MainWindow:
         if not self._running:
             return
         self._stop_event.set()
-        self.stop_btn.state(["disabled"])
-        self._log("⏹ 강제 중지 중...", "warn")
+        # 즉시 UI 상태 전환 (지연 없이)
+        self._set_running(False)
+        self.progress.set_progress(0)
         self.banner.set_state("warn", "중지 중...", "브라우저를 강제 종료하고 있습니다")
+        self._log("⏹ 강제 중지 중...", "warn")
 
         def force():
-            # 브라우저 프로세스 강제 kill
             drv = self.driver
             self.driver = None
             if drv:
@@ -530,15 +594,12 @@ class MainWindow:
                     )
                 except Exception:
                     pass
-            self.root.after(0, self._on_stopped)
+            self.root.after(0, lambda: (
+                self.banner.set_state("warn", "중지됨", "사용자에 의해 자동화가 강제 중지되었습니다"),
+                self._log("⏹ 자동화가 강제 중지되었습니다", "warn"),
+            ))
 
         threading.Thread(target=force, daemon=True).start()
-
-    def _on_stopped(self):
-        self._set_running(False)
-        self.progress.set_progress(0)
-        self.banner.set_state("warn", "중지됨", "사용자에 의해 자동화가 강제 중지되었습니다")
-        self._log("⏹ 자동화가 강제 중지되었습니다", "warn")
 
     def _cleanup_driver(self):
         if self.driver:
@@ -574,12 +635,22 @@ class MainWindow:
             self._progress_panel.pack_forget()
             self.detail_preview.pack(fill="both", expand=True)
             self._showing_progress = False
+            self._update_view_tabs()
 
     def _show_progress(self):
         if not self._showing_progress:
             self.detail_preview.pack_forget()
             self._progress_panel.pack(fill="both", expand=True)
             self._showing_progress = True
+            self._update_view_tabs()
+
+    def _update_view_tabs(self):
+        active = 1 if self._showing_progress else 0
+        for i, btn in enumerate(self._view_tabs):
+            if i == active:
+                btn.configure(bg=BG_CARD, fg=ACCENT)
+            else:
+                btn.configure(bg=BG_SURFACE, fg=FG_MUTED)
 
     # ── 글자 크기 ────────────────────────────────────────
 

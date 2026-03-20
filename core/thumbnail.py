@@ -1,8 +1,23 @@
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from pathlib import Path
+import sys
 
-THUMBNAIL_DIR = Path(__file__).parent.parent / "assets" / "thumbnail"
-FONT_PATH = r"C:\Windows\Fonts\malgunbd.ttf"
+def _base_dir() -> Path:
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent.parent
+
+def _output_dir() -> Path:
+    """생성된 파일 저장 경로 (APPDATA 하위)."""
+    import os
+    d = Path(os.environ.get("APPDATA", ".")) / "NaverBlogAutomation" / "thumbnail"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+ASSETS_DIR = _base_dir() / "assets" / "thumbnail"
+OUTPUT_DIR = _output_dir()
+LOGO_PATH = _base_dir() / "assets" / "logo_가로-누끼.png"
+FONT_PATH = _base_dir() / "assets" / "fonts" / "malgunbd.ttf"
 THUMBNAIL_SIZE = 1080  # 1:1 정사각형
 
 
@@ -87,9 +102,14 @@ def create_thumbnail(
 
     total_text_height = h1 + line_gap + h2
 
-    # 하단 좌측 배치
+    # 하단 중앙 배치
     y2 = THUMBNAIL_SIZE - margin_bottom - h2
     y1 = y2 - line_gap - h1
+
+    w1 = bbox1[2] - bbox1[0]
+    w2 = bbox2[2] - bbox2[0]
+    x1 = (THUMBNAIL_SIZE - w1) // 2
+    x2 = (THUMBNAIL_SIZE - w2) // 2
 
     # 외곽선 두께 (폰트 크기에 비례)
     outline1 = max(3, font1.size // 25)
@@ -97,20 +117,34 @@ def create_thumbnail(
 
     # 그림자 (은은하게)
     shadow_offset = max(2, font1.size // 40)
-    _draw_outlined_text(draw, (margin_x + shadow_offset, y1 + shadow_offset), line1, font1,
+    _draw_outlined_text(draw, (x1 + shadow_offset, y1 + shadow_offset), line1, font1,
                         fill=(0, 0, 0, 120), outline_color=(0, 0, 0, 80), outline_width=outline1 + 2)
-    _draw_outlined_text(draw, (margin_x + shadow_offset, y2 + shadow_offset), line2, font2,
+    _draw_outlined_text(draw, (x2 + shadow_offset, y2 + shadow_offset), line2, font2,
                         fill=(0, 0, 0, 120), outline_color=(0, 0, 0, 80), outline_width=outline2 + 2)
 
     # 본문 텍스트
-    _draw_outlined_text(draw, (margin_x, y1), line1, font1,
+    _draw_outlined_text(draw, (x1, y1), line1, font1,
                         fill=accent_color, outline_color=(0, 0, 0), outline_width=outline1)
-    _draw_outlined_text(draw, (margin_x, y2), line2, font2,
+    _draw_outlined_text(draw, (x2, y2), line2, font2,
                         fill=(255, 255, 255), outline_color=(0, 0, 0), outline_width=outline2)
 
-    # 4) 저장
+    # 4) 우측 상단 로고 오버레이
+    if LOGO_PATH.exists():
+        try:
+            logo = Image.open(LOGO_PATH).convert("RGBA")
+            logo_h = int(THUMBNAIL_SIZE * 0.07)
+            logo_w = int(logo.width * (logo_h / logo.height))
+            logo = logo.resize((logo_w, logo_h), Image.LANCZOS)
+            logo_margin = int(THUMBNAIL_SIZE * 0.03)
+            logo_x = THUMBNAIL_SIZE - logo_w - logo_margin
+            logo_y = logo_margin
+            img.paste(logo, (logo_x, logo_y), logo)
+        except Exception:
+            pass
+
+    # 5) 저장
     if output_path is None:
-        output_path = THUMBNAIL_DIR / "output.png"
+        output_path = OUTPUT_DIR / "output.png"
     output_path = Path(output_path)
     img.convert("RGB").save(output_path, quality=95)
     return output_path
@@ -120,11 +154,11 @@ def _pick_random_background() -> Path:
     """thumbnail 폴더에서 base.png를 제외한 랜덤 이미지를 선택한다."""
     import random
     candidates = [
-        f for f in THUMBNAIL_DIR.glob("*.png")
+        f for f in ASSETS_DIR.glob("*.png")
         if f.name not in ("base.png", "test_output.png", "output.png")
     ]
     if not candidates:
-        raise FileNotFoundError(f"배경 이미지가 없습니다: {THUMBNAIL_DIR}")
+        raise FileNotFoundError(f"배경 이미지가 없습니다: {ASSETS_DIR}")
     return random.choice(candidates)
 
 
@@ -167,6 +201,6 @@ if __name__ == "__main__":
         bg,
         line1=line1,
         line2=line2,
-        output_path=THUMBNAIL_DIR / "output.png",
+        output_path=OUTPUT_DIR / "output.png",
     )
     print(f"[OK] 썸네일 생성 완료: {result}")

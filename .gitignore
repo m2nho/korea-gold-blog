@@ -18,7 +18,7 @@ dist/
 .idea/
 
 # Logs
-logs/*.log
+logs/
 
 # OS
 Thumbs.db
@@ -29,4 +29,14 @@ Desktop.ini
 *.key
 *.pem
 .env
-logs/
+
+# Selenium
+chromedriver.exe
+geckodriver.exe
+
+# Output
+output/
+
+# Generated thumbnails (keep base template)
+assets/thumbnail/
+!assets/thumbnail/base.png

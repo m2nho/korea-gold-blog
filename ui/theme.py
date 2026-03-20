@@ -3,6 +3,7 @@ from tkinter import ttk
 import datetime
 import math
 import weakref
+import threading
 
 # ── 색상 팔레트 (Catppuccin Mocha 확장) ──────────────────
 BG = "#1e1e2e"
@@ -478,15 +479,16 @@ class PreviewCard(tk.Frame):
 class DetailPreview(tk.Frame):
     """탭 기반 상세 미리보기: 요약 / 시세표 / 뉴스"""
 
-    TAB_NAMES = ["📄 요약", "📊 시세표", "📰 뉴스"]
+    TAB_NAMES = ["🖼 썸네일", "📄 요약", "📊 시세표", "📰 뉴스"]
 
-    def __init__(self, master, **kw):
+    def __init__(self, master, thumbnail_var: "tk.BooleanVar | None" = None, **kw):
         kw.setdefault("bg", BG_CARD)
         super().__init__(master, **kw)
         self.configure(highlightbackground=BORDER, highlightthickness=1)
 
         self._current_tab = 0
         self._post = None
+        self._thumbnail_var = thumbnail_var
 
         # 탭 바
         self._tab_bar = tk.Frame(self, bg=BG_SURFACE)
@@ -515,7 +517,7 @@ class DetailPreview(tk.Frame):
                  justify="center").pack()
 
         # 탭별 프레임 (lazy)
-        self._tab_frames: list[tk.Frame | None] = [None, None, None]
+        self._tab_frames: list[tk.Frame | None] = [None, None, None, None]
 
         self._switch_tab(0)
 
@@ -530,7 +532,7 @@ class DetailPreview(tk.Frame):
 
     def set_post(self, post):
         self._post = post
-        self._tab_frames = [None, None, None]  # 캐시 초기화
+        self._tab_frames = [None, None, None, None]  # 캐시 초기화
         self._render()
 
     def _render(self):
@@ -543,12 +545,9 @@ class DetailPreview(tk.Frame):
 
         idx = self._current_tab
         if self._tab_frames[idx] is None:
-            if idx == 0:
-                self._tab_frames[idx] = self._build_summary()
-            elif idx == 1:
-                self._tab_frames[idx] = self._build_table()
-            else:
-                self._tab_frames[idx] = self._build_news()
+            builders = [self._build_thumbnail, self._build_summary,
+                        self._build_table, self._build_news]
+            self._tab_frames[idx] = builders[idx]()
 
         self._tab_frames[idx].pack(fill="both", expand=True)
 
@@ -623,7 +622,7 @@ class DetailPreview(tk.Frame):
         scrollbar.pack(side="right", fill="y")
 
         # 헤더
-        headers = ["상품", p.compare_date or "전일", p.date or "오늘", "변동"]
+        headers = ["상품(고객기준)", p.compare_date or "전일", p.date or "오늘", "변동"]
         hdr_colors = [FG_MUTED, LAVENDER, TEAL, WARNING]
         hdr_row = tk.Frame(table_frame, bg=BG_SURFACE)
         hdr_row.pack(fill="x")
@@ -713,6 +712,202 @@ class DetailPreview(tk.Frame):
         if diff_str.startswith("-") or diff_str.startswith("▼"):
             return TEAL
         return FG_DIM
+
+    # ── 썸네일 탭 ────────────────────────────────────────
+
+    def _build_thumbnail(self) -> tk.Frame:
+        from core.thumbnail import create_thumbnail, _split_title, _pick_random_background, ASSETS_DIR
+        from tkinter import filedialog, colorchooser
+        from pathlib import Path
+
+        p = self._post
+        f = tk.Frame(self._content, bg=BG_CARD, padx=16, pady=10)
+
+        # ── 썸네일 사용 토글 ─────────────────────────────
+        if self._thumbnail_var is not None:
+            toggle_row = tk.Frame(f, bg=BG_CARD)
+            toggle_row.pack(fill="x", pady=(0, 8))
+            ToggleSwitch(toggle_row, variable=self._thumbnail_var).pack(side="left")
+            toggle_lbl = tk.Label(toggle_row, text="썸네일 사용", bg=BG_CARD, fg=FG_DIM,
+                                  font=("Segoe UI", 9), cursor="hand2")
+            toggle_lbl.pack(side="left", padx=(6, 0))
+            toggle_lbl.bind("<Button-1>", lambda _: self._thumbnail_var.set(not self._thumbnail_var.get()))
+            tk.Frame(f, bg=BORDER, height=1).pack(fill="x", pady=(0, 8))
+
+        # section2_title → 자동 분리
+        title_text = p.section2_title or ""
+        l1, l2 = _split_title(title_text)
+
+        # 1줄 입력
+        tk.Label(f, text="1줄 (강조)", bg=BG_CARD, fg=FG_MUTED,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        line1_entry = PlaceholderEntry(f, placeholder="강조 문구")
+        line1_entry.pack(fill="x", ipady=3)
+        line1_entry.set_value(l1)
+
+        # 2줄 입력
+        tk.Label(f, text="2줄 (보조)", bg=BG_CARD, fg=FG_MUTED,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(6, 0))
+        line2_entry = PlaceholderEntry(f, placeholder="보조 설명")
+        line2_entry.pack(fill="x", ipady=3)
+        line2_entry.set_value(l2)
+
+        # 옵션 행: 강조색 + 배경
+        opt_row = tk.Frame(f, bg=BG_CARD)
+        opt_row.pack(fill="x", pady=(8, 0))
+
+        # 강조색
+        accent_var = [(255, 60, 60)]  # mutable default
+        color_box = tk.Label(opt_row, text="  ", bg="#ff3c3c", width=3,
+                             relief="solid", borderwidth=1, cursor="hand2")
+        color_box.pack(side="left")
+        tk.Label(opt_row, text=" 강조색", bg=BG_CARD, fg=FG_DIM,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(2, 12))
+
+        def pick_color(_=None):
+            if self._thumbnail_var and not self._thumbnail_var.get():
+                return
+            c = colorchooser.askcolor(color=color_box.cget("bg"), title="강조색 선택")
+            if c and c[0]:
+                accent_var[0] = tuple(int(v) for v in c[0])
+                color_box.configure(bg=c[1])
+        color_box.bind("<Button-1>", pick_color)
+
+        # 배경 이미지 선택
+        bg_path_var = [None]  # None = 랜덤
+        bg_label = tk.Label(opt_row, text="🎲 랜덤 배경", bg=BG_CARD, fg=TEAL,
+                            font=("Segoe UI", 8), cursor="hand2")
+        bg_label.pack(side="right")
+
+        def pick_bg(_=None):
+            if self._thumbnail_var and not self._thumbnail_var.get():
+                return
+            path = filedialog.askopenfilename(
+                title="배경 이미지 선택",
+                initialdir=str(ASSETS_DIR),
+                filetypes=[("이미지", "*.png *.jpg *.jpeg *.webp")],
+            )
+            if path:
+                bg_path_var[0] = path
+                name = Path(path).name
+                bg_label.configure(text=f"📁 {name[:20]}", fg=ACCENT)
+            else:
+                bg_path_var[0] = None
+                bg_label.configure(text="🎲 랜덤 배경", fg=TEAL)
+        bg_label.bind("<Button-1>", pick_bg)
+
+        # 하단 버튼 (먼저 pack해서 하단 고정)
+        btn_row = tk.Frame(f, bg=BG_CARD)
+        btn_row.pack(fill="x", side="bottom", pady=(8, 0))
+
+        status_lbl = tk.Label(btn_row, text="", bg=BG_CARD, fg=FG_MUTED,
+                              font=("Segoe UI", 8))
+        status_lbl.pack(side="left")
+
+        # 미리보기 영역 (나머지 공간 채움)
+        preview_frame = tk.Frame(f, bg=BG_INPUT, highlightbackground=BORDER,
+                                 highlightthickness=1)
+        preview_frame.pack(fill="both", expand=True, pady=(8, 0))
+        preview_frame.pack_propagate(False)
+        preview_label = tk.Label(preview_frame, text="🖼  생성 버튼을 눌러 미리보기",
+                                 bg=BG_INPUT, fg=FG_MUTED, font=("Segoe UI", 9))
+        preview_label.pack(expand=True)
+
+        # 비활성 오버레이
+        overlay_lbl = tk.Label(preview_frame, text="썸네일 사용이 꺼져 있습니다",
+                               bg=BG_INPUT, fg=FG_MUTED, font=("Segoe UI", 10))
+        self._thumb_photo = None  # GC 방지
+
+        def do_generate():
+            l1_val = line1_entry.get_value().strip()
+            l2_val = line2_entry.get_value().strip()
+            if not l1_val:
+                status_lbl.configure(text="1줄을 입력하세요", fg=ERROR)
+                return
+            gen_btn.configure(state="disabled")
+            status_lbl.configure(text="생성 중...", fg=WARNING)
+
+            def worker():
+                try:
+                    bg_img = bg_path_var[0] or str(_pick_random_background())
+                    out = create_thumbnail(
+                        bg_img, l1_val, l2_val,
+                        accent_color=tuple(accent_var[0]),
+                    )
+                    self.winfo_toplevel().after(0, lambda: on_done(out))
+                except Exception as e:
+                    self.winfo_toplevel().after(0, lambda: on_error(str(e)))
+
+            def on_done(path):
+                try:
+                    from PIL import Image, ImageTk
+                    pil_img = Image.open(path)
+                    preview_frame.update_idletasks()
+                    pw = max(preview_frame.winfo_width() - 4, 200)
+                    ph = max(preview_frame.winfo_height() - 4, 200)
+                    fit = min(pw / pil_img.width, ph / pil_img.height)
+                    new_w = int(pil_img.width * fit)
+                    new_h = int(pil_img.height * fit)
+                    pil_img = pil_img.resize((new_w, new_h), Image.LANCZOS)
+                    self._thumb_photo = ImageTk.PhotoImage(pil_img)
+                    preview_label.configure(image=self._thumb_photo, text="")
+                    self._last_thumb_path = str(path)
+                    save_btn.configure(state="normal")
+                    status_lbl.configure(text="✅ 생성 완료", fg=SUCCESS)
+                except Exception as e:
+                    status_lbl.configure(text=f"미리보기 실패: {e}", fg=ERROR)
+                gen_btn.configure(state="normal")
+
+            def on_error(msg):
+                status_lbl.configure(text=f"❌ {msg}", fg=ERROR)
+                gen_btn.configure(state="normal")
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def do_save():
+            from tkinter import filedialog as fd
+            import shutil
+            src = getattr(self, '_last_thumb_path', None)
+            if not src:
+                return
+            dst = fd.asksaveasfilename(
+                title="썸네일 저장",
+                defaultextension=".png",
+                initialfile="thumbnail.png",
+                filetypes=[("PNG", "*.png"), ("모든 파일", "*.*")],
+            )
+            if dst:
+                shutil.copy2(src, dst)
+                status_lbl.configure(text="✅ 저장 완료", fg=SUCCESS)
+
+        save_btn = ttk.Button(btn_row, text="💾 저장",
+                              style="Secondary.TButton", command=do_save)
+        save_btn.pack(side="right", padx=(4, 0))
+        save_btn.configure(state="disabled")
+
+        gen_btn = ttk.Button(btn_row, text="🖼  썸네일 생성",
+                             style="Secondary.TButton", command=do_generate)
+        gen_btn.pack(side="right")
+
+        # 토글 상태에 따라 위젯 활성/비활성
+        if self._thumbnail_var is not None:
+            def _update_state(*_):
+                on = self._thumbnail_var.get()
+                state = "normal" if on else "disabled"
+                for entry in (line1_entry, line2_entry):
+                    entry.configure(state=state)
+                gen_btn.configure(state=state)
+                color_box.configure(cursor="hand2" if on else "")
+                bg_label.configure(cursor="hand2" if on else "")
+                if not on:
+                    overlay_lbl.place(relx=0.5, rely=0.5, anchor="center")
+                else:
+                    overlay_lbl.place_forget()
+
+            self._thumbnail_var.trace_add("write", _update_state)
+            _update_state()  # 초기 상태 적용
+
+        return f
 
 
 # ── 로그 패널 ────────────────────────────────────────────
