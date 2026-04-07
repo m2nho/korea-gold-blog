@@ -833,6 +833,7 @@ class DetailPreview(tk.Frame):
                     out = create_thumbnail(
                         bg_img, l1_val, l2_val,
                         accent_color=tuple(accent_var[0]),
+                        date_label=p.date or "",
                     )
                     self.winfo_toplevel().after(0, lambda: on_done(out))
                 except Exception as e:

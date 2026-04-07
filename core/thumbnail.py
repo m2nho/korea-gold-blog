@@ -50,6 +50,7 @@ def create_thumbnail(
     line2: str,
     output_path: str | Path = None,
     accent_color: tuple = (255, 60, 60),
+    date_label: str = "",
 ) -> Path:
     """
     유튜브 경제 뉴스 스타일 1:1 썸네일을 생성한다.
@@ -128,7 +129,39 @@ def create_thumbnail(
     _draw_outlined_text(draw, (x2, y2), line2, font2,
                         fill=(255, 255, 255), outline_color=(0, 0, 0), outline_width=outline2)
 
-    # 4) 우측 상단 로고 오버레이
+    # 4) 좌측 상단 날짜 뱃지
+    if date_label:
+        date_text = f"{date_label} 금시세"
+        date_font_size = int(THUMBNAIL_SIZE * 0.055)
+        date_font = ImageFont.truetype(FONT_PATH, date_font_size)
+        pad_x = int(THUMBNAIL_SIZE * 0.022)
+        pad_y = int(THUMBNAIL_SIZE * 0.016)
+        badge_margin = int(THUMBNAIL_SIZE * 0.03)
+        bar_w = int(THUMBNAIL_SIZE * 0.012)
+
+        tbbox = draw.textbbox((0, 0), date_text, font=date_font)
+        tw = tbbox[2] - tbbox[0]
+        th = tbbox[3] - tbbox[1]
+
+        box_x0 = badge_margin
+        box_y0 = badge_margin
+        box_x1 = box_x0 + bar_w + pad_x + tw + pad_x
+        box_y1 = box_y0 + pad_y + th + pad_y
+
+        # 반투명 다크 배경
+        badge_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        badge_draw = ImageDraw.Draw(badge_overlay)
+        badge_draw.rectangle([box_x0, box_y0, box_x1, box_y1], fill=(0, 0, 0, 175))
+        # 강조색 세로 바
+        badge_draw.rectangle([box_x0, box_y0, box_x0 + bar_w, box_y1], fill=(*accent_color, 255))
+        img = Image.alpha_composite(img, badge_overlay)
+
+        draw = ImageDraw.Draw(img)
+        tx = box_x0 + bar_w + pad_x
+        ty = box_y0 + pad_y - tbbox[1]  # ascender 보정
+        draw.text((tx, ty), date_text, font=date_font, fill=(255, 255, 255))
+
+    # 5) 우측 상단 로고 오버레이
     if LOGO_PATH.exists():
         try:
             logo = Image.open(LOGO_PATH).convert("RGBA")
@@ -142,7 +175,7 @@ def create_thumbnail(
         except Exception:
             pass
 
-    # 5) 저장
+    # 6) 저장
     if output_path is None:
         output_path = OUTPUT_DIR / "output.png"
     output_path = Path(output_path)

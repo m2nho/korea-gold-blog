@@ -508,7 +508,7 @@ class MainWindow:
             if not l1:
                 l1 = self.selected_post.section1_title or "썸네일"
             bg = str(_pick_random_background())
-            return create_thumbnail(bg, l1, l2)
+            return create_thumbnail(bg, l1, l2, date_label=self.selected_post.date or "")
         except Exception as e:
             logger.exception("썸네일 자동 생성 실패")
             return None
