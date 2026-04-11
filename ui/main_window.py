@@ -49,6 +49,7 @@ class MainWindow:
         self._running = False
         self._stop_event = Event()
         self.use_thumbnail_var = tk.BooleanVar(value=True)
+        self._thumbnail_generated = False  # 이번 세션에서 썸네일 생성 여부
 
         self._build_ui()
         self._load_saved()
@@ -117,7 +118,7 @@ class MainWindow:
                                      fg=FG_MUTED, font=("Consolas", 8), width=4)
         self._scale_label.pack(side="left", padx=(4, 0))
 
-        tk.Label(bar, text="v1.1.0", bg=BG_SURFACE, fg=FG_MUTED,
+        tk.Label(bar, text="v1.2.0", bg=BG_SURFACE, fg=FG_MUTED,
                  font=("Consolas", 8), padx=8).pack(side="right")
 
         # 2-패널 컨테이너
@@ -268,7 +269,8 @@ class MainWindow:
         self._right_mid.pack(fill="both", expand=True)
 
         # 미리보기 패널
-        self.detail_preview = DetailPreview(self._right_mid, thumbnail_var=self.use_thumbnail_var)
+        self.detail_preview = DetailPreview(self._right_mid, thumbnail_var=self.use_thumbnail_var,
+                                             on_thumbnail_generated=self._on_thumbnail_generated)
 
         # 진행 단계 패널
         self._progress_panel = tk.Frame(self._right_mid, bg=BG)
@@ -494,23 +496,25 @@ class MainWindow:
         else:
             self._after_thumbnail(True)
 
+    def _on_thumbnail_generated(self):
+        self._thumbnail_generated = True
+
     def _ensure_thumbnail(self) -> Path | None:
-        """output.png가 있으면 재사용, 없으면 자동 생성"""
         from core.thumbnail import create_thumbnail, _split_title, _pick_random_background, OUTPUT_DIR
         output = OUTPUT_DIR / "output.png"
-        if output.exists():
-            self._status_cb("🖼 기존 썸네일을 사용합니다", "info")
+        if self._thumbnail_generated and output.exists():
+            self._status_cb("🖼 기존 썬네일을 사용합니다", "info")
             return output
         try:
-            self._status_cb("🖼 썸네일을 자동 생성합니다", "info")
+            self._status_cb("🖼 썬네일을 자동 생성합니다", "info")
             title = self.selected_post.section2_title or ""
             l1, l2 = _split_title(title)
             if not l1:
-                l1 = self.selected_post.section1_title or "썸네일"
+                l1 = self.selected_post.section1_title or "썬네일"
             bg = str(_pick_random_background())
             return create_thumbnail(bg, l1, l2, date_label=self.selected_post.date or "")
-        except Exception as e:
-            logger.exception("썸네일 자동 생성 실패")
+        except Exception:
+            logger.exception("썬네일 자동 생성 실패")
             return None
 
     def _after_thumbnail(self, ok: bool):
@@ -571,43 +575,20 @@ class MainWindow:
         if not self._running:
             return
         self._stop_event.set()
-        # 즉시 UI 상태 전환 (지연 없이)
         self._set_running(False)
         self.progress.set_progress(0)
-        self.banner.set_state("warn", "중지 중...", "브라우저를 강제 종료하고 있습니다")
-        self._log("⏹ 강제 중지 중...", "warn")
-
-        def force():
-            drv = self.driver
-            self.driver = None
-            if drv:
-                try:
-                    pid = drv.service.process.pid
-                    drv.quit()
-                except Exception:
-                    pass
-                try:
-                    import subprocess
-                    subprocess.run(
-                        ['taskkill', '/F', '/T', '/PID', str(pid)],
-                        capture_output=True, timeout=5,
-                    )
-                except Exception:
-                    pass
-            self.root.after(0, lambda: (
-                self.banner.set_state("warn", "중지됨", "사용자에 의해 자동화가 강제 중지되었습니다"),
-                self._log("⏹ 자동화가 강제 중지되었습니다", "warn"),
-            ))
-
-        threading.Thread(target=force, daemon=True).start()
+        self.banner.set_state("warn", "중지됨", "사용자에 의해 자동화가 중지되었습니다")
+        self._log("⏹ 자동화가 중지되었습니다", "warn")
+        # 브라우저는 종료하지 않고 유지
+        self.driver = None
 
     def _cleanup_driver(self):
+        # 프로필에 로그인 정보가 저장되도록 quit 대신 브라우저만 닫음
         if self.driver:
             try:
-                self.driver.quit()
-                logger.info("브라우저 종료 완료")
+                self.driver.close()
             except Exception:
-                logger.warning("브라우저 종료 중 오류", exc_info=True)
+                pass
             finally:
                 self.driver = None
 

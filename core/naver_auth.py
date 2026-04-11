@@ -121,6 +121,22 @@ def _close_help_panel(driver: WebDriver):
         pass
 
 
+def _is_logged_in(driver: WebDriver) -> bool:
+    """네이버 메인에서 로그인 링크 존재 여부로 로그인 상태 확인"""
+    try:
+        driver.get("https://www.naver.com")
+        _interruptible_sleep(2)
+        login_link = driver.execute_script("""
+            return document.querySelector('#account a.MyView-module__link_login___HpHMW');
+        """)
+        logged_in = login_link is None
+        logger.info(f"로그인 상태: {'로그인됨' if logged_in else '미로그인'}")
+        return logged_in
+    except Exception as e:
+        logger.warning(f"로그인 상태 확인 실패: {e}")
+        return False
+
+
 # ── 로그인 ───────────────────────────────────────────────
 
 def login(
@@ -132,6 +148,12 @@ def login(
     try:
         on_status("🌐 Chrome 브라우저를 시작합니다", "info")
         driver = create_driver()
+
+        # 이미 로그인된 상태면 바로 성공 반환
+        on_status("🔍 로그인 상태를 확인합니다", "info")
+        if _is_logged_in(driver):
+            on_status("✅ 이미 로그인된 상태입니다", "success")
+            return LoginResult(True, driver, "세션 재사용")
 
         on_status("🔗 네이버 로그인 페이지로 이동합니다", "info")
         driver.get(LOGIN_URL)
@@ -206,6 +228,24 @@ def navigate_to_write(
         _interruptible_sleep(2)
         _dismiss_all_alerts(driver)
         logger.info(f"블로그 진입: {driver.current_url}")
+
+        # 블로그 진입 팝업 닫기 (mainFrame 안에 있음)
+        try:
+            wait_popup = WebDriverWait(driver, 5)
+            iframe = wait_popup.until(EC.presence_of_element_located((By.ID, "mainFrame")))
+            driver.switch_to.frame(iframe)
+            try:
+                close_btn = WebDriverWait(driver, 3).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "button.btn_close._btn_close"))
+                )
+                close_btn.click()
+                logger.info("팝업 닫기 완료")
+                _interruptible_sleep(0.5)
+            except Exception:
+                pass
+            driver.switch_to.default_content()
+        except Exception:
+            driver.switch_to.default_content()
 
         on_status("🔍 글쓰기 버튼을 찾고 있습니다", "info")
         wait = WebDriverWait(driver, 10)

@@ -481,7 +481,8 @@ class DetailPreview(tk.Frame):
 
     TAB_NAMES = ["🖼 썸네일", "📄 요약", "📊 시세표", "📰 뉴스"]
 
-    def __init__(self, master, thumbnail_var: "tk.BooleanVar | None" = None, **kw):
+    def __init__(self, master, thumbnail_var: "tk.BooleanVar | None" = None,
+                 on_thumbnail_generated=None, **kw):
         kw.setdefault("bg", BG_CARD)
         super().__init__(master, **kw)
         self.configure(highlightbackground=BORDER, highlightthickness=1)
@@ -489,6 +490,7 @@ class DetailPreview(tk.Frame):
         self._current_tab = 0
         self._post = None
         self._thumbnail_var = thumbnail_var
+        self._on_thumbnail_generated = on_thumbnail_generated
 
         # 탭 바
         self._tab_bar = tk.Frame(self, bg=BG_SURFACE)
@@ -855,6 +857,8 @@ class DetailPreview(tk.Frame):
                     self._last_thumb_path = str(path)
                     save_btn.configure(state="normal")
                     status_lbl.configure(text="✅ 생성 완료", fg=SUCCESS)
+                    if self._on_thumbnail_generated:
+                        self._on_thumbnail_generated()
                 except Exception as e:
                     status_lbl.configure(text=f"미리보기 실패: {e}", fg=ERROR)
                 gen_btn.configure(state="normal")
